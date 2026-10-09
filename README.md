@@ -176,10 +176,8 @@ sin necesidad de Python instalado) para todos los sistemas/arquitecturas:
 
 | Binario                              | SO / arquitectura                         |
 |--------------------------------------|-------------------------------------------|
-| `uc-drive-downloader-linux-x64`      | Linux x86_64 (glibc)                      |
-| `uc-drive-downloader-linux-arm64`    | Linux ARM64 (glibc) — Raspberry, Termux   |
-| `uc-drive-downloader-alpine-x64`     | Linux x86_64 **musl** (Alpine/distros musl)|
-| `uc-drive-downloader-alpine-arm64`   | Linux ARM64 **musl** (Alpine)             |
+| `uc-drive-downloader-linux-x64`      | Linux x86_64                              |
+| `uc-drive-downloader-linux-arm64`    | Linux ARM64 — Raspberry, Termux/proot     |
 | `uc-drive-downloader-macos-arm64`    | macOS Apple Silicon                       |
 | `uc-drive-downloader-windows-x64.exe`| Windows 64 bits                           |
 | `uc-drive-downloader-windows-arm64.exe` | Windows on ARM                          |
@@ -187,12 +185,14 @@ sin necesidad de Python instalado) para todos los sistemas/arquitecturas:
 Cada binario va acompañado de su checksum `*.sha256` para verificar la
 integridad. Formato del nombre: `<nombre>-<sistema>-<arquitectura>`.
 
-**¿Por qué estas combinaciones?** glibc y musl no son ABI-compatibles, por eso
-hay builds `linux-*` (glibc) y `alpine-*` (musl) por arquitectura; el binario
-macOS ARM también corre en Macs Intel vía Rosetta 2; y Windows ARM puede
-ejecutar el `.exe` x64 por emulación. Más detalle en cada nota del release.
+**¿Por qué estas combinaciones?** macOS ARM también corre en Macs Intel via
+Rosetta 2; Windows ARM puede ejecutar el `.exe` x64 por emulación y el
+`windows-arm64` se compila nativo en el runner `windows-11-arm` de GitHub.
+Los binarios Alpine/musl se descartaron (compilación cruzada inestable en CI):
+en distros musl usa el `linux-*` con la libc de tu sistema. Más detalle en
+cada nota del release.
 
-El flujo CI (`/.github/workflows/release.yml`) compila esos 7 al publicar un tag
+El flujo CI (`/.github/workflows/release.yml`) compila esos 5 al publicar un tag
 `v*` y los adjunta al Release automáticamente. Para compilar localmente::
 
     tools/build.sh                 # detecta SO/arq y genera unique binario

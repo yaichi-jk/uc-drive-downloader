@@ -9,10 +9,12 @@ versión sigue [SemVer](https://semver.org/lang/es/).
 
 ### Añadido
 - Release **multiplataforma**: binarios únicos (PyInstaller `--onefile`) para
-  Linux x64/arm64, Alpine x64/arm64 (musl), macOS ARM, Windows x64 y Windows
-  ARM, cada uno con checksum `.sha256`.
-- Notas de release detalladas (tabla de binarios + explicación glibc vs musl,
-  macOS Intel descartado, Windows ARM por emulación).
+  Linux x64/arm64, macOS ARM, Windows x64 y Windows ARM (runner hosteado
+  `windows-11-arm`), cada uno con checksum `.sha256`.
+- Binarios Alpine/musl **descartados** (compilación cruzada inestable en CI):
+  en distros musl se usa el binario `linux-*` con la libc del sistema.
+- Notas de release detalladas (tabla de binarios + explicación de por qué
+  no hay macOS Intel ni Alpine).
 - Comandos completos del CLI: `info`, `list`, `view`, `raw`, `download` y `test`.
 - Soporte de URLs completas (`https://uc-share.com/s/<id>?la=es-la`).
 - Flags globales `--no-color`, `--verbose` y `--version`.

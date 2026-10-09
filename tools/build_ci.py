@@ -26,8 +26,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 def _canonical() -> str:
-    import ctypes.util
-
     so = sys.platform
     if so.startswith("win"):
         plat = "windows"
@@ -36,9 +34,7 @@ def _canonical() -> str:
         plat = "macos"
         ext = ""
     elif so.startswith("linux"):
-        # Alpine v.s. distros glibc: musl y glibc no son ABI-compatibles.
-        libc = (ctypes.util.find_library("c") or "").lower()
-        plat = "alpine" if "musl" in libc else "linux"
+        plat = "linux"
         ext = ""
     else:
         plat = so
