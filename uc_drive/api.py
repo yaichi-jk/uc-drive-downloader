@@ -157,10 +157,13 @@ class UcDriveIntlClient:
                 req_id=parsed.get("req_id"),
             )
 
-        # Si el servidor rota el stoken, lo guardamos automáticamente.
-        tk = (parsed.get("data") or {}).get("token_info") or {}
-        if tk.get("stoken"):
-            self.stoken = tk["stoken"]
+        # Si el servidor rota el stoken (solo en respuestas que traen data dict),
+        # lo guardamos automáticamente.
+        data = parsed.get("data")
+        if isinstance(data, dict):
+            tk = data.get("token_info") or {}
+            if tk.get("stoken"):
+                self.stoken = tk["stoken"]
 
         return parsed
 
@@ -247,6 +250,30 @@ class UcDriveIntlClient:
                 "la entrada no trae download_url (¿es una carpeta?)", code=resp.get("code")
             )
         return entry
+
+    def walk_share(self, pwd_id: str, pdir_fid: str = "0",
+                   path_folders: Tuple[str, ...] = ()):
+        """Recorre recursivamente la share y devuelve cada archivo.
+
+        Esta es la función que usan ``list --recursive`` y ``download`` para
+        encontrar archivos aunque estén metidos en subcarpetas.
+
+        Args:
+            pwd_id: identificador de la share.
+            pdir_fid: carpeta desde la que empezar ('' o "0" => raíz).
+            path_folders: pila de nombres de carpeta (uso interno recursivo).
+
+        Yields:
+            Tupla ``(ruta_relativa_str, item)`` para cada archivo (no carpeta).
+        """
+        _, items = self.list_share(pwd_id, pdir_fid=pdir_fid)
+        for item in items:
+            ruta = "/".join(path_folders + (item.get("file_name", ""),))
+            if item.get("dir"):
+                yield from self.walk_share(pwd_id, item.get("fid", ""),
+                                           path_folders + (item.get("file_name", ""),))
+            else:
+                yield ruta, item
 
     def resolve_share(self, pwd_id: str) -> str:
         """Conveniencia: refresca el stoken y devuelve el título de la share."""
