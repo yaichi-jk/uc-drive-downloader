@@ -1,7 +1,7 @@
 """Cliente de la API pública de UC Drive (plataforma internacional).
 
 Descripción general
--------------------
+--------------------
 Este módulo implementa las llamadas mínimas que necesita la página web oficial
 de UC Drive (https://uc-share.com / https://drive.ucweb.com) para resolver un
 enlace de compartir ("share") y obtener la URL directa de descarga de cada
@@ -23,17 +23,38 @@ llegar cifradas (cabecera ``X-U-Content-Encoding: wg``). El propio web solicita
 **no** cifrar la respuesta enviando la cabecera ``X-U-Req-Res-Encoding: no``,
 que es exactamente lo que hacemos aquí para trabajar 100% en claro.
 
-Sólo utiliza la biblioteca estándar de Python (``urllib``), por lo que no
-necesita dependencias externas.
+Errores: todos los fallos se lanzan como :class:`ApiError` tipificados (atributo
+``kind``) según :mod:`uc_drive.errors`, con reintentos automáticos ante fallos
+transitorios (red, timeout, 5xx y limitación de frecuencia).
 """
 
 from __future__ import annotations
 
 import json
+import socket
+import ssl
+import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from http.client import RemoteDisconnected
 from typing import Any, Dict, List, Optional, Tuple
+
+from uc_drive.errors import (
+    BUSINESS,
+    KIND_AUTH,
+    KIND_FORBIDDEN,
+    KIND_HTTP,
+    KIND_INVALID,
+    KIND_NETWORK,
+    KIND_NOT_FOUND,
+    KIND_RATE_LIMIT,
+    KIND_SERVER,
+    KIND_TIMEOUT,
+    KIND_UNKNOWN,
+    UCError,
+)
 
 # Host base de la API de UC Drive internacional (descubierto en el bundle web).
 CLOUD_DRIVE_URL = "https://m-intldrive.ucweb.com"
@@ -48,23 +69,71 @@ USER_AGENT = (
 REFERER = "https://drive.ucweb.com/"
 
 
-class ApiError(Exception):
-    """Error devuelto por la API de UC Drive (status HTTP y/o code JSON)."""
+class ApiError(UCError):
+    """Error devuelto por la API de UC Drive.
 
-    def __init__(self, message: str, http_status: Optional[int] = None,
-                 code: Optional[int] = None, req_id: Optional[str] = None):
-        super().__init__(message)
-        self.http_status = http_status
-        self.code = code
+    Attributes:
+        message: descripción corta (en español cuando la conocemos).
+        kind: categoría del error (ver ``uc_drive.errors``).
+        code: código JSON de negocio (ej. 41027).
+        http: código HTTP (ej. 403).
+        req_id: identificador de petición que reporta el servidor (si existe).
+    """
+
+    def __init__(self, message: str, kind: str = KIND_UNKNOWN,
+                 code: Optional[int] = None, http: Optional[int] = None,
+                 req_id: Optional[str] = None):
+        super().__init__(message, kind=kind, code=code, http=http)
         self.req_id = req_id
 
-    def __str__(self) -> str:  # pragma: no cover
-        detail = f"[HTTP {self.http_status}]" if self.http_status else ""
+    @property
+    def http_status(self) -> Optional[int]:
+        return self.http
+
+    def __str__(self) -> str:
+        partes = [self.message]
+        if self.http:
+            partes.append(f"[HTTP {self.http}]")
         if self.code:
-            detail += f" [code {self.code}]"
+            partes.append(f"[code {self.code}]")
         if self.req_id:
-            detail += f" (req_id {self.req_id})"
-        return f"{detail} {self.args[0]}".strip()
+            partes.append(f"(req_id {self.req_id})")
+        return " ".join(partes)
+
+
+def _clasificar_http(code: int, reason: str, cuerpo: str = "") -> ApiError:
+    """Mapa HTTP/código de negocio -> ApiError tipificado."""
+    # Códigos de negocio (JSON) tienen prioridad cuando vienen en el cuerpo.
+    try:
+        payload = json.loads(cuerpo)
+    except (json.JSONDecodeError, ValueError):
+        payload = {}
+    negocio = payload.get("code") or payload.get("error_code")
+    error_msg = (payload.get("message") or payload.get("msg") or reason or "error")
+
+    kind = ""
+    if negocio in BUSINESS:
+        kind = BUSINESS[negocio]
+    elif code == 400:
+        kind = KIND_INVALID
+    elif code == 401:
+        kind = KIND_AUTH
+    elif code == 403:
+        kind = KIND_FORBIDDEN
+    elif code == 404:
+        kind = KIND_NOT_FOUND
+    elif code == 410:
+        kind = KIND_NOT_FOUND
+    elif code == 429:
+        kind = KIND_RATE_LIMIT
+    elif 500 <= code < 600:
+        kind = KIND_SERVER
+    else:
+        kind = KIND_HTTP
+
+    if negocio:
+        return ApiError(f"{error_msg}", kind=kind, code=negocio, http=code)
+    return ApiError(f"{error_msg}", kind=kind, http=code)
 
 
 class UcDriveIntlClient:
@@ -73,16 +142,29 @@ class UcDriveIntlClient:
     Cada método recibe y devuelve los campos según vienen del servidor. El
     estado relevante (``stoken``) se actualiza automáticamente cuando el
     servidor lo rota en alguna respuesta.
+
+    Args:
+        base_url: host base de la API.
+        timeout: segundos de espera por petición HTTP.
+        retries: reintentos ante fallos transitorios (red/timeout/5xx/429).
+        verbose: si True, imprime log interno de cada petición en stderr.
     """
 
-    def __init__(self, base_url: str = CLOUD_DRIVE_URL, timeout: int = 30):
+    def __init__(self, base_url: str = CLOUD_DRIVE_URL, timeout: int = 30,
+                 retries: int = 2, verbose: bool = False):
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
+        self.retries = retries
+        self.verbose = verbose
         self.stoken: Optional[str] = None
 
     # ------------------------------------------------------------------
     # Helpers HTTP
     # ------------------------------------------------------------------
+    def _log(self, msg: str) -> None:
+        if self.verbose:
+            print(f"[api] {msg}", file=sys.stderr)
+
     def _request_json(
         self,
         method: str,
@@ -102,7 +184,7 @@ class UcDriveIntlClient:
 
         Raises:
             ApiError: si la respuesta no es JSON de éxito (``status != 200`` o
-                ``code != 0``).
+                ``code != 0``), con ``kind`` tipificado.
         """
         url = self.base_url + path
         if params:
@@ -122,40 +204,75 @@ class UcDriveIntlClient:
         if stoken:
             headers["x-clouddrive-st"] = stoken
 
-        req = urllib.request.Request(url, data=data, headers=headers, method=method.upper())
-        try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                raw = resp.read().decode("utf-8")
-                encoding = resp.headers.get("X-U-Content-Encoding")
-        except urllib.error.HTTPError as exc:
-            raw = exc.read().decode("utf-8", "replace")
-            encoding = exc.headers.get("X-U-Content-Encoding")
-            http_status = exc.code
-        except urllib.error.URLError as exc:
-            raise ApiError(f"error de red: {exc.reason}")
+        latest: Optional[ApiError] = None
+        for intento in range(self.retries + 1):
+            t0 = time.time()
+            try:
+                with urllib.request.urlopen(urllib.request.Request(
+                        url, data=data, headers=headers, method=method.upper()),
+                        timeout=self.timeout) as resp:
+                    raw = resp.read().decode("utf-8")
+                    http_status = resp.status
+                    req_id = resp.headers.get("X-U-Web-Req-Time") or None
+                dur = (time.time() - t0) * 1000
+                self._log(f"{method} {path} -> 200 ({dur:.0f} ms)")
+                break
+            except urllib.error.HTTPError as exc:
+                raw = exc.read().decode("utf-8", "replace")
+                http_status = exc.code
+                req_id = None
+                dur = (time.time() - t0) * 1000
+                self._log(f"{method} {path} -> HTTP {http_status} ({dur:.0f} ms)")
+                latest = _clasificar_http(http_status, exc.reason or str(exc),
+                                          cuerpo=raw)
+            except urllib.error.URLError as exc:
+                causa = exc.reason if exc.reason else exc
+                dur = (time.time() - t0) * 1000
+                self._log(f"{method} {path} -> {type(causa).__name__} ({dur:.0f} ms)")
+                latest = _clasificar_transitorio(causa)
+            except (socket.timeout, TimeoutError) as exc:
+                dur = (time.time() - t0) * 1000
+                self._log(f"{method} {path} -> timeout ({dur:.0f} ms)")
+                latest = ApiError("tiempo de espera agotado", kind=KIND_TIMEOUT)
+            except (ssl.SSLError, RemoteDisconnected, ConnectionError, OSError) as exc:
+                dur = (time.time() - t0) * 1000
+                self._log(f"{method} {path} -> {type(exc).__name__} ({dur:.0f} ms)")
+                latest = ApiError(f"error de red: {exc}", kind=KIND_NETWORK)
 
-        if encoding:
-            # No debería pasar porque pedimos "no"; si ocurre lo marcamos claro.
+            # Reintentos solo para fallos transitorios.
+            if latest is not None and _es_transitorio(latest):
+                espera = 1.0 * (intento + 1)
+                self._log(f"  re-intento {intento + 1} en {espera:.0f}s…")
+                time.sleep(espera)
+                continue
+            # Los no transitorios se propagan de inmediato.
+            if latest is not None:
+                raise latest
+        else:
+            raise latest or ApiError("petición fallida", kind=KIND_UNKNOWN)
+
+        if "X-U-Content-Encoding" in resp.headers:
             raise ApiError(
                 f"el servidor respondió cifrado wg (inicio {raw[:16]!r}); "
-                "omite/inspecciona la llamada 'X-U-Req-Res-Encoding'",
-                http_status=locals().get("http_status"),
+                "revisa la cabecera 'X-U-Req-Res-Encoding: no'",
+                kind=KIND_UNKNOWN, http=http_status,
             )
 
         try:
             parsed: Dict[str, Any] = json.loads(raw)
         except json.JSONDecodeError:
-            raise ApiError(f"respuesta no JSON: {raw[:120]!r}", http_status=locals().get("http_status"))
+            raise ApiError(f"respuesta no JSON: {raw[:120]!r}", kind=KIND_UNKNOWN,
+                           http=http_status)
 
         status = parsed.get("status")
         code = parsed.get("code")
         if status != 200 or code != 0:
-            raise ApiError(
-                parsed.get("message") or parsed.get("error") or "error desconocido",
-                http_status=locals().get("http_status"),
-                code=code,
-                req_id=parsed.get("req_id"),
-            )
+            negocio = code or parsed.get("error_code")
+            msg = (parsed.get("message") or parsed.get("msg") or parsed.get("error")
+                   or "error desconocido")
+            kind = BUSINESS.get(negocio, KIND_INVALID if status == 400 else KIND_UNKNOWN)
+            raise ApiError(str(msg), kind=kind, code=negocio, http=http_status,
+                           req_id=parsed.get("req_id"))
 
         # Si el servidor rota el stoken (solo en respuestas que traen data dict),
         # lo guardamos automáticamente.
@@ -281,3 +398,20 @@ class UcDriveIntlClient:
         _, items = self.list_share(pwd_id, pdir_fid="0")
         title = (items[0] if items else {}).get("file_name", pwd_id)
         return title
+
+
+# ---------------------------------------------------------------------------
+# Clasificación de fallos transitorios (reintentables)
+# ---------------------------------------------------------------------------
+def _es_transitorio(err: ApiError) -> bool:
+    return err.kind in (KIND_NETWORK, KIND_TIMEOUT, KIND_SERVER, KIND_RATE_LIMIT)
+
+
+def _clasificar_transitorio(causa: BaseException) -> ApiError:
+    if isinstance(causa, (socket.timeout, TimeoutError)):
+        return ApiError("tiempo de espera agotado", kind=KIND_TIMEOUT)
+    if isinstance(causa, socket.gaierror):
+        return ApiError(f"no se pudo resolver el host: {causa}", kind=KIND_NETWORK)
+    if isinstance(causa, (ssl.SSLError, RemoteDisconnected, ConnectionError, OSError)):
+        return ApiError(f"error de red: {causa}", kind=KIND_NETWORK)
+    return ApiError(f"error de red: {causa}", kind=KIND_NETWORK)
