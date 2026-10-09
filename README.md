@@ -179,10 +179,13 @@ sin necesidad de Python instalado) para todos los sistemas/arquitecturas:
 | `uc-drive-downloader-linux-x64`      | Linux x86_64                         |
 | `uc-drive-downloader-linux-arm64`    | Linux ARM64 (Raspberry, Termux/proot)|
 | `uc-drive-downloader-macos-arm64`    | macOS Apple Silicon                  |
-| `uc-drive-downloader-macos-x64`      | macOS Intel                          |
 | `uc-drive-downloader-windows-x64.exe`| Windows 64 bits                      |
 
-El flujo CI (`/.github/workflows/release.yml`) compila los 5 al publicar un tag
+Cada binario va acompañado de su checksum `*.sha256` para verificar la
+integridad de la descarga. El formato sigue el esquema
+`<nombre>-<sistema>-<arquitectura>` usado por otros descargadores CLI.
+
+El flujo CI (`/.github/workflows/release.yml`) compila esos 4 al publicar un tag
 `v*` y los adjunta al Release automáticamente. Para compilar localmente::
 
     tools/build.sh                 # detecta SO/arq y genera unique binario
