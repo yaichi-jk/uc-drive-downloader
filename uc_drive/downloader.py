@@ -16,36 +16,96 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import os
+import socket
+import ssl
 import time
 import urllib.error
 import urllib.request
+from http.client import RemoteDisconnected
 from pathlib import Path
 from typing import Callable, Optional
+
+from uc_drive.errors import (
+    KIND_FORBIDDEN,
+    KIND_HTTP,
+    KIND_NETWORK,
+    KIND_NOT_FOUND,
+    KIND_RATE_LIMIT,
+    KIND_SERVER,
+    KIND_TIMEOUT,
+    KIND_UNKNOWN,
+    UCError,
+)
+from uc_drive.util import format_bytes
 
 CHUNK = 1024 * 1024  # 1 MiB por lectura
 
 
-class DownloadError(Exception):
+class DownloadError(UCError):
     """Error durante la descarga (red, verificación, etc.)."""
 
 
 ProgressCallback = Callable[[int, int, float], None]
 """firma: progress(downloaded, total_or_0, speed_bps)"""
 
+EventCallback = Callable[[str, dict], None]
+"""firma: event(nombre, datos).
+
+Nombres de evento emitidos por ``ResumableDownloader``:
+
+- ``connecting``  -> ``{"resume_from": int}`` (acaba de pedir el rango)
+- ``streaming``   -> ``{"total": int, "resumed_from": int}`` (transfiriendo)
+- ``verifying``   -> ``{"md5_b64": str}`` (empieza comprobación)
+- ``verify_progress`` -> ``{"percent": float}``
+- ``done``        -> ``{"path": str, "size": int, "seconds": float}``
+"""
+
+
+def _clasificar_exc(exc: BaseException) -> DownloadError:
+    """Convierte excepciones de red/servidor en ``DownloadError`` tipificado."""
+    if isinstance(exc, urllib.error.HTTPError):
+        return _http_error(exc.code, exc.reason)
+    if isinstance(exc, (socket.timeout, TimeoutError)):
+        return DownloadError("tiempo de espera agotado en la descarga", kind=KIND_TIMEOUT)
+    if isinstance(exc, (socket.gaierror,)):
+        return DownloadError(f"no se pudo resolver el host: {exc}", kind=KIND_NETWORK)
+    if isinstance(exc, (ssl.SSLError, RemoteDisconnected, ConnectionError, OSError)):
+        return DownloadError(f"error de red: {exc}", kind=KIND_NETWORK)
+    return DownloadError(f"error inesperado: {exc}", kind=KIND_UNKNOWN)
+
+
+def _http_error(code: int, reason: str) -> DownloadError:
+    """Mapea un código HTTP a un ``DownloadError`` con ``kind`` legible."""
+    if code == 404:
+        return DownloadError(f"HTTP 404: {reason}", kind=KIND_NOT_FOUND, http=404)
+    if code == 403:
+        return DownloadError(f"HTTP 403: {reason}", kind=KIND_FORBIDDEN, http=403)
+    if code in (429,):
+        return DownloadError(f"HTTP 429: {reason}", kind=KIND_RATE_LIMIT, http=429)
+    if 500 <= code < 600:
+        return DownloadError(f"HTTP {code}: {reason}", kind=KIND_SERVER, http=code)
+    return DownloadError(f"HTTP {code}: {reason}", kind=KIND_HTTP, http=code)
+
 
 def _open_range(url: str, start: int, timeout: int):
-    """Abre un GET con cabecera Range desde ``start`` y devuelve la respuesta."""
+    """Abre un GET con cabecera Range desde ``start`` y devuelve la respuesta.
+
+    Raises:
+        DownloadError: cuyos ``kind``/``http`` tipifican el fallo.
+    """
     req = urllib.request.Request(url, headers={"Range": f"bytes={start}-"})
     try:
         return urllib.request.urlopen(req, timeout=timeout)
-    except urllib.error.HTTPError as exc:
-        # 416 => rango fuera de límite; lo traduce el llamador.
-        if exc.code == 416:
-            raise DownloadError("416: rango fuera de límite (¿archivo ya completo?)")
-        raise DownloadError(f"HTTP {exc.code}: {exc.reason}")
     except urllib.error.URLError as exc:
-        raise DownloadError(f"error de red: {exc.reason}")
+        raise _clasificar_exc(exc.reason if exc.reason else exc)
+    except (socket.timeout, TimeoutError) as exc:
+        raise DownloadError("tiempo de espera agotado en la descarga",
+                            kind=KIND_TIMEOUT) from exc
+    except (ssl.SSLError, RemoteDisconnected, ConnectionError, OSError) as exc:
+        raise DownloadError(f"error de red en la descarga: {exc}",
+                            kind=KIND_NETWORK) from exc
+    except urllib.error.HTTPError as exc:  # pragma: no cover (subclase de URLError)
+        raise _http_error(exc.code, exc.reason) from exc
 
 
 class ResumableDownloader:
@@ -80,12 +140,14 @@ class ResumableDownloader:
     # API pública
     # ------------------------------------------------------------------
     def download(self, progress: Optional[ProgressCallback] = None,
+                 on_event: Optional[EventCallback] = None,
                  resume: bool = True,
                  max_retries: int = 5, retry_delay: float = 2.0) -> str:
         """Descarga el archivo (reanudable) y devuelve la ruta final.
 
         Args:
-            progress: callback(opcional) con bytes descargados/total y velocidad.
+            progress: callback(opcional) datos de progreso (bytes/total/velocidad).
+            on_event: callback(opcional) con eventos de fase (ver EventCallback).
             resume: si True, continúa sobre un archivo parcial existente.
             max_retries: reintentos ante errores de red intermitentes.
             retry_delay: segundos de espera entre reintentos.
@@ -98,13 +160,18 @@ class ResumableDownloader:
                 verificación de tamaño/MD5 falla.
         """
         self.dest.parent.mkdir(parents=True, exist_ok=True)
+        t0 = time.time()
 
         start = 0
         if resume and self.dest.exists():
             start = self.dest.stat().st_size
-            if self.expected_size is not None and start >= self.expected_size:
-                self._verify(self.dest)  # ya estaba completo
-                return str(self.dest)
+        if self.expected_size is not None and start >= self.expected_size:
+            self._verify(self.dest, on_event)  # ya estaba completo
+            if on_event:
+                on_event("done", {"path": str(self.dest),
+                                  "size": int(self.dest.stat().st_size),
+                                  "seconds": time.time() - t0})
+            return str(self.dest)
 
         # Si hay archivo parcial, ábrelo en r+b; si no, créalo.
         mode = "r+b" if (start and resume) else "wb"
@@ -114,7 +181,7 @@ class ResumableDownloader:
         attempts = 0
         while True:
             try:
-                self._download(start, mode, progress)
+                self._download(start, mode, progress, on_event)
                 break
             except (DownloadError, OSError) as exc:
                 attempts += 1
@@ -125,17 +192,26 @@ class ResumableDownloader:
                 start = self.dest.stat().st_size
                 mode = "r+b"
 
-        self._verify(self.dest)
+        self._verify(self.dest, on_event)
+        if on_event:
+            on_event("done", {"path": str(self.dest),
+                              "size": int(self.dest.stat().st_size),
+                              "seconds": time.time() - t0})
         return str(self.dest)
 
     # ------------------------------------------------------------------
     # internos
     # ------------------------------------------------------------------
     def _download(self, start: int, mode: str,
-                  progress: Optional[ProgressCallback]) -> None:
+                  progress: Optional[ProgressCallback],
+                  on_event: Optional[EventCallback]) -> None:
         """Bucle principal: pide Range y escribe los chunks."""
+        if on_event:
+            on_event("connecting", {"resume_from": start})
         resp = _open_range(self.url, start, self.timeout)
         total = self.expected_size or _content_length(resp)
+        if on_event:
+            on_event("streaming", {"total": total, "resumed_from": start})
 
         written = start
         last_report = time.time()
@@ -145,7 +221,16 @@ class ResumableDownloader:
         with open(self.dest, mode) as fh:
             fh.seek(start)
             while True:
-                block = resp.read(self.chunk)
+                try:
+                    block = resp.read(self.chunk)
+                except (socket.timeout, TimeoutError) as exc:
+                    raise DownloadError(f"tiempo de espera agotado (a partir de "
+                                        f"{format_bytes(written)})",
+                                        kind=KIND_TIMEOUT) from exc
+                except (ssl.SSLError, RemoteDisconnected, ConnectionError, OSError) as exc:
+                    raise DownloadError(f"conexión perdida (a partir de "
+                                        f"{format_bytes(written)}): {exc}",
+                                        kind=KIND_NETWORK) from exc
                 if not block:
                     break
                 fh.write(block)
@@ -160,21 +245,36 @@ class ResumableDownloader:
         if progress is not None:
             progress(written, total or written, speed)
 
-    def _verify(self, path: Path) -> None:
-        """Comprueba tamaño y MD5 si se conocen los valores esperados."""
+    def _verify(self, path: Path, on_event: Optional[EventCallback] = None) -> None:
+        """Comprueba tamaño y MD5 si se conocen los valores esperados.
+
+        Mientras calcula el MD5 emite eventos ``verify_progress`` para que la
+        interfaz pueda mostrar su propia barra de progreso.
+        """
         size = path.stat().st_size
         if self.expected_size is not None and size != self.expected_size:
             raise DownloadError(
                 f"tamaño incorrecto: esperado {self.expected_size}, descargado {size}"
             )
         if self.expected_md5_b64 is not None:
+            if on_event:
+                on_event("verifying", {"md5_b64": self.expected_md5_b64})
             digest = hashlib.md5()
             with open(path, "rb") as fh:
-                for block in iter(lambda: fh.read(CHUNK), b""):
+                processed = 0
+                while True:
+                    block = fh.read(CHUNK)
+                    if not block:
+                        break
                     digest.update(block)
+                    processed += len(block)
+                    if on_event and (processed // CHUNK) % 16 == 0:
+                        on_event("verify_progress", {"percent": processed / size * 100.0})
             got = base64.b64encode(digest.digest()).decode()
             if got != self.expected_md5_b64:
-                raise DownloadError(f"MD5 no coincide: esperado {self.expected_md5_b64}, obtenido {got}")
+                raise DownloadError(
+                    f"MD5 no coincide: esperado {self.expected_md5_b64}, obtenido {got}"
+                )
 
 
 def _content_length(resp) -> int:
@@ -183,13 +283,3 @@ def _content_length(resp) -> int:
         return int(resp.headers.get("Content-Length") or 0)
     except (TypeError, ValueError):
         return 0
-
-
-def format_bytes(n: float) -> str:
-    """Formatea bytes a una unidad legible (KiB/MiB/GiB)."""
-    value = float(n)
-    for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
-        if value < 1024 or unit == "TiB":
-            return f"{value:.1f} {unit}" if unit != "B" else f"{int(value)} B"
-        value /= 1024
-    return f"{value:.1f} B"
