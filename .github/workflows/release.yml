@@ -33,10 +33,18 @@ jobs:
         shell: bash
         run: |
           cd dist
-          for f in *; do
-            [ -f "$f" ] || continue
-            sha256sum "$f" > "$f.sha256"
-          done
+          python - <<'PY'
+          import glob, hashlib, os
+          for f in sorted(glob.glob('*')):
+              if not os.path.isfile(f) or f.endswith('.sha256'):
+                  continue
+              h = hashlib.sha256()
+              with open(f, 'rb') as fp:
+                  for chunk in iter(lambda: fp.read(1 << 20), b''):
+                      h.update(chunk)
+              with open(f + '.sha256', 'w') as out:
+                  out.write(f"{h.hexdigest()}  {os.path.basename(f)}\n")
+          PY
           ls -la
       - name: Subir artefacto
         uses: actions/upload-artifact@v4
