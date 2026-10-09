@@ -1,0 +1,25 @@
+# Archivos multimedia y descargas (sería pesado subirlos a git)
+*.mp4
+*.mkv
+*.avi
+*.mov
+*.webm
+*.zip
+*.rar
+*.7z
+
+# Caché de Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Entorno
+.env
+*.local
+
+# Temporales
+*.log
+url.txt
+verificacion*.txt
