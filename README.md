@@ -210,9 +210,17 @@ En Android (Termux) el binario `linux-arm64` corre dentro del proot/termux.
 - [x] CLI documentado (`info`, `list`, `view`, `raw`, `download`, `test`).
 - [x] Descarga de árboles completos (recursivo en `download`).
 - [x] Errores tipificados (404/403/429/timeout/red) con reintentos.
-- [ ] Repositorio privado en GitHub + releases binarios (pendiente).
+- [x] Repositorio privado en GitHub + releases binarios multiplataforma (CI).
 
-## Licencia
+## Licencia y contribuciones
 
-Solo para fines educativos. El código de este proyecto no está afiliado,
-respaldado ni patrocinado por UC Web / Alibaba Group.
+Proyecto con fines educativos y de uso personal. Distribuido bajo la
+licencia **MIT** — consulta [`LICENSE`](LICENSE).
+
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) — cómo colaborar.
+- [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md) — código de conducta.
+- [`SECURITY.md`](SECURITY.md) — cómo reportar vulnerabilidades.
+- [`CHANGELOG.md`](CHANGELOG.md) — historial de versiones.
+
+El código de este proyecto no está afiliado, respaldado ni patrocinado por
+UC Web / Alibaba Group.
