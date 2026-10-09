@@ -113,14 +113,25 @@ jobs:
             ### Uso
 
             ```bash
-            # Linux / macOS / Alpine — dar permiso de ejecución
+            # Linux / macOS / Termux — permiso de ejecución la primera vez
             chmod +x uc-drive-downloader-linux-x64
             ./uc-drive-downloader-linux-x64 info "https://uc-share.com/s/577cf9ba429a4?la=es-la"
             ./uc-drive-downloader-linux-x64 download 577cf9ba429a4 --all
 
-            # Windows
+            # Windows — no necesita chmod
             uc-drive-downloader-windows-x64.exe view 577cf9ba429a4 --file "video.mp4" --url
             ```
+
+            ### Notas por plataforma
+
+            - **Linux / macOS / Termux**: requiere `chmod +x` la primera vez.
+            - **macOS (descarga con Safari/Chrome)**: quita la cuarentena
+              con `xattr -d com.apple.quarantine uc-drive-downloader-macos-arm64`
+              antes de ejecutarlo.
+            - **Windows**: no necesita chmod; la primera vez SmartScreen puede
+              pedir confirmación (*More info → Run anyway*).
+            - **Windows on ARM**: usa el binario nativo `windows-arm64.exe`;
+              el `windows-x64.exe` también funciona por emulación.
 
             Para una **verificación de integridad** al descargar un binario:
 

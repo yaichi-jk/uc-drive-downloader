@@ -203,6 +203,27 @@ Utilizar un binario es igual que el CLI::
     ./uc-drive-downloader-linux-x64 info "https://uc-share.com/s/577cf9ba429a4?la=es-la"
     uc-drive-downloader-windows-x64.exe download 577cf9ba429a4 --all
 
+### Ejecutar el binario por primera vez
+
+- **Linux / macOS / Termux**: se necesita permiso de ejecución (basta una vez):
+  ```bash
+  chmod +x uc-drive-downloader-linux-x64
+  ./uc-drive-downloader-linux-x64 --version
+  ```
+- **macOS**: si lo descargaste con Safari/Chrome, quita además la cuarentena:
+  ```bash
+  chmod +x uc-drive-downloader-macos-arm64
+  xattr -d com.apple.quarantine uc-drive-downloader-macos-arm64
+  ./uc-drive-downloader-macos-arm64 --version
+  ```
+- **Windows**: no necesita chmod; ejecútalo directo (`uc-drive-downloader-windows-x64.exe ...`).
+  La primera vez SmartScreen puede pedir confirmación (*More info → Run anyway*).
+- **Verificar integridad** con el checksum (no es para ejecutar):
+  ```bash
+  sha256sum -c uc-drive-downloader-linux-x64.sha256   # linux/macos/alpine
+  certutil -hashfile uc-drive-downloader-windows-x64.exe SHA256   # windows
+  ```
+
 En Android (Termux) el binario `linux-arm64` corre dentro del proot/termux.
 
 ## Limitaciones conocidas
