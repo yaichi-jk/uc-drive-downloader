@@ -1,0 +1,2 @@
+# Dependencias SOLO para empaquetar binarios (no hace falta para usar el código fuente)
+pyinstaller>=6.0

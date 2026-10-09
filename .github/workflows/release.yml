@@ -1,0 +1,58 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+          - ubuntu-latest          # linux x64
+          - ubuntu-24.04-arm       # linux arm64
+          - macos-14               # macos arm64 (Apple silicon)
+          - macos-13               # macos x64 (Intel)
+          - windows-latest         # windows x64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Instalar PyInstaller
+        run: python -m pip install -q -r requirements-build.txt
+      - name: Empaquetar binario onefile
+        run: python tools/build_ci.py
+      - name: Subir artefacto
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.runner }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    name: publicar release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/checkout@v4
+      - name: Descargar binarios
+        uses: actions/download-artifact@v4
+        with:
+          path: binarios
+          merge-multiple: true
+      - name: Crear/actualizar Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: binarios/*
+          fail_on_unmatched_files: true
