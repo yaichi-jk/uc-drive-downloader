@@ -169,6 +169,32 @@ uc-drive-downloader/
     └── descarga_ejemplo.py   # script de ejemplo completo
 ```
 
+## Releases (binarios únicos por plataforma)
+
+Cada release publica **ejecutables autocontenidos** (PyInstaller `--onefile`,
+sin necesidad de Python instalado) para todos los sistemas/arquitecturas:
+
+| Binario                              | SO / arquitectura                    |
+|--------------------------------------|--------------------------------------|
+| `uc-drive-downloader-linux-x64`      | Linux x86_64                         |
+| `uc-drive-downloader-linux-arm64`    | Linux ARM64 (Raspberry, Termux/proot)|
+| `uc-drive-downloader-macos-arm64`    | macOS Apple Silicon                  |
+| `uc-drive-downloader-macos-x64`      | macOS Intel                          |
+| `uc-drive-downloader-windows-x64.exe`| Windows 64 bits                      |
+
+El flujo CI (`/.github/workflows/release.yml`) compila los 5 al publicar un tag
+`v*` y los adjunta al Release automáticamente. Para compilar localmente::
+
+    tools/build.sh                 # detecta SO/arq y genera unique binario
+    python tools/build_ci.py       # variante con nombre por plataforma-arm
+
+Utilizar un binario es igual que el CLI::
+
+    ./uc-drive-downloader-linux-x64 info "https://uc-share.com/s/577cf9ba429a4?la=es-la"
+    uc-drive-downloader-windows-x64.exe download 577cf9ba429a4 --all
+
+En Android (Termux) el binario `linux-arm64` corre dentro del proot/termux.
+
 ## Limitaciones conocidas
 
 - Solo funciona con shares de la plataforma **internacional** de UC Drive.
