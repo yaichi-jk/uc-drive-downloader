@@ -48,13 +48,13 @@ python3 -m uc_drive.cli list e8ccf39f80024
 # 3) Listar todo de forma recursiva
 python3 -m uc_drive.cli list e8ccf39f80024 --recursive
 
-# 4) Descargar un archivo por nombre
+# 4) Descargar un archivo por nombre (busca en subcarpetas)
 python3 -m uc_drive.cli download e8ccf39f80024 --file "mi_video.mp4" --out ./descargas
 
 # 5) Descargar por fid
 python3 -m uc_drive.cli download e8ccf39f80024 --fid 992d0757255a47d799fa8f8634fb9ce8
 
-# 6) Descargar el primer archivo de la raíz
+# 6) Descargar TODO el contenido de la share (recursivo)
 python3 -m uc_drive.cli download e8ccf39f80024 --out ./descargas
 ```
 
@@ -134,8 +134,6 @@ uc-drive-downloader/
 
 - Solo funciona con shares de la plataforma **internacional** de UC Drive.
   Las shares de `drive.uc.cn` (CN) usan otros hosts y flujos.
-- Solo descarga archivos de la **raíz** (sin recorrer subcarpetas todavía en el
-  comando `download`; usa `--fid` si necesitas algo concreto).
 - Los enlaces caducan (~3 h); para archivos enormes hay que reanudar antes de
   que expire la URL, o re-solicitar la URL con `get_download_url`.
 
@@ -145,7 +143,7 @@ uc-drive-downloader/
 - [x] Obtención de URL directa firmada.
 - [x] Descarga reanudable con verificación de integridad.
 - [x] CLI documentado (`info`, `list`, `download`).
-- [ ] Descarga de árboles completos (recursivo en `download`).
+- [x] Descarga de árboles completos (recursivo en `download`).
 - [ ] Repositorio privado en GitHub + releases binarios (pendiente).
 
 ## Licencia
